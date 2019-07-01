@@ -196,4 +196,36 @@ JSC uses an incremental GC. This kind if GC performs the marking in several step
 
 To avoid this scenario, so called write barriers are inserted into the engine. These take care of notifying the GC in such a scenario. These barriers are implemented in JSC with the `WriteBarrier<>` and `CopyBarrier<>` classes. 
 
+Lastly, JSC uses both, a moving and non-moving garbage collector. A moving garbage collector moves live objects to a different location and updates all pointers to these objects. This optimizes for the case of many dead objects since there is no runtime overhead for these: instead of adding them to a free list, the whole memory region is sinmply declared free, JSC stores the JavaScript objects itself, together with a few other objects, inside a non-moving heap, the marked space, while storing the butterflies and other arrays inside a moving heap, the copied space.
 
+# Marked space
+The marked space is a collection of memory blocks that keep track of the allocated cells. In JSC, every object allocated in marked space must inherit from the JSCell class and this starts with an eight bytre header, which, among other fields, contains the current cell state as used by the GC. This field is used by the collector to keep track of the cells that it has already visited. 
+
+There is another thing worth mentioning about marked space: JSC stored a `MarkedBlock` instance at the beginning of each marked block:
+```c++
+inline MarkedBlock* MarkedBlock::blockFor(const void* p)
+{
+	return reinterpret_cast<MarkedBlock*>(
+		reinterpret_cast<Bits>(p) & blockMask;)
+}
+```
+This instance contains among other things a pointer to the owning `heap` and `vm` instance which allows the engine to obtain these if they are not available in the current context. This makes it more difficult to set up fake objects, as a valid `MarkedBlock` instance might be required when performing certain ops. It is this desirable to create fake objects inside a valid marked block if possible.
+
+# Copied space
+The copied space stores memory buffers that are associated with some object inside the marked space. These are mostly butterflies, but the contents of types arrays may also be located here. As such, our out-of-bounds access happens in this memory region.
+```c++
+// the copied allocator
+CheckedBoolean CopiedAllocator::tryAllocate(size_t bytes, void** out)
+{
+	ASSERT(is8ByteAligned(reinterpret_cast<void*>(bytes)));
+	size_t currentRemaining = m_currentRemaining;
+	if (bytes > currentRemaining)
+		return false;
+	currentRemaining -= bytes;
+	m_currentRemaining = currentRemaining; 
+	*out = m_currentPayloadEnd - currentRemaining - bytes;
+
+	Assert(is8BytesAligned(*out));
+	return true;
+}
+```
