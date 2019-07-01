@@ -2,11 +2,11 @@
 
 JavaScript engine contains at least: 
 - a compiler infrastructure. at least one just-in-time compiler
-- a virtual machine that operated on JS values 
+- a virtual machine that operates on JS values 
 - a runtime that provides a set of builtin objects and functions
 
 # VM, Values & NaN-boxing
-The virtual machine contains an interpreter which can directly execute the emitted bytecode. The VM is often implemented as stack-based machines and
+The virtual machine contains an interpreter which can directly execute the emitted bytecode. The VM is often implemented as stack-based machine and
 thus operated around a stack of values.
 
 Often the first stage JIT compiler takes care of removing some of the dispatching overhead of the interpreter while higher stage JIT compilers perform
@@ -22,31 +22,50 @@ JS has the following primitive types:
 - undefined 
 - symbol
 
-Objectes
+Objects
 - arrays
 - functions
 
 All major JS engines represent a value a value with no more than 8 bytes forperfomance reasons (fast copying, fits into a register on 64-bit archs).
-JSC(JavaScript Core) & SpiderMonkey use a concept called NaN-Boxing. NaN-Boxing makes use of the fact that there exist multiple bit pattern which all
+JSC(JavaScript Core) & SpiderMonkey use a concept called NaN-Boxing. NaN-Boxing makes use of the fact that there exist multiple bit patterns which all
 represent NaN, so other values can be encoded in these. Specifically, ever IEE 754 floating point value with all exponent bits set, but a fraction not
 equal to zero represents NaN. For double precision values this leaves us with 2^51 different bits of patterns. Thats enough to encode both 32-bit ints
 and pointers, since even on 64-bit platforms only 48 bits are currently used for addressing 
 
 # Objects and Arrays
+
 *Objects* in JS are esentially collections of properties which are stores as key, value pairs. Properties can be accessed either with the dot operator
 or through square brackers. At least in theory, values used as keys are converted to strings before performing the lookup.
+```js
+// create an object and assign key:value pairs
+var obj = {}; // object creation
+obj.name = "nerdy amigo" // create a key value pair
+// access the property name
+console.log(obj.name)
+// "nerdy amigo"
+console.log(obj["name"])
+// "nerdy amigo"
+```
 
 *Arrays* are described by the specs as special objects whose props are also called elements if the property name can be represented by a 32-bit
-integer. Most engines today extent this notion to all objects. An array then becomes an object with special 'length' property whose value is always
+integer. Most engines today extend this notion to all objects. An array then becomes an object with a special 'length' property whose value is always
 equal to the index of the highest element plus one. The net result of all this is that every object has both properties, accesed through a string or
 symbol key, and elements accessed through int indices.
+```js
+// create an array with some data
+var arr = [1,2,3,4,5]
+// access data using indices
+console.log(arr[0])
+// 1
+```
 
 Internally, JSC stores both properties and elements in the same memory region and stores a pointer to that region in the object itself. This pointer
-points to the middle of the region, propertiesare stored to the left of it(lower addressed) and elements to the right. There is also a small header
+points to the middle of the region, properties are stored to the left of it(lower addressed) and elements to the right. There is also a small header
 located just before the pointed to address that contains the length of the element vector. This concept is called a "Butterfly" since the values
 expand to the left and right, similar to the wings of a butterfly. Presumably. 
 
 # Functions
+
 When executing a function's body, two special variables become available. One of them *'arguments'* provides access to the arguments and caller of the
 function, thus enabling the creation of function with a varible number of arguments. The other *'this'* refers to different objects depending on the
 invocation of the function.

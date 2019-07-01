@@ -1,0 +1,1 @@
+# Notes about attacking js engines - specifically webkit
