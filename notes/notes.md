@@ -97,5 +97,28 @@ Looking at the code, it is easy to assume that the varible `begin` and `end` wou
 native ints. However we can violate that assumption by abusing JS type conversion rules
 
 # JS conversion rules 
+JS is inherently weakly typed, meaning it will happily convert values of different types into the type it currently requires. Consider `Math.abs()`
+which return the absolute value of the arg. All of the following are "valid" invocations, meaning they will not raise an exception: 
+```js
+Math.abs(-42); // argument is a num
+// 42
+Math.abs("-42") // argument is a string
+// 42
+Math.abs([])	// argument is an empty array 
+// 0
+Math.abs(true)	// argument is a boolean
+// 1
+Math.abs({})	// argument is an object
+// NaN
+```
+In contrast, strongly type langs such as python will usually raise an exception if i.e a string is passed to `abs()`
 
+The rules governing the conversion from object types to numbers are specialy interestin. In particular, if the object has a called propery named
+`valueOf`, this method will be called and the retuend value used if its a primitive value. And thus
+```js
+Math.abs({valueOf: function() {return -42}})
+//42
+```
+
+# Exploiting with `valueOf`
 
