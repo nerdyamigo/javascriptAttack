@@ -229,3 +229,53 @@ CheckedBoolean CopiedAllocator::tryAllocate(size_t bytes, void** out)
 	return true;
 }
 ```
+This is essentially a bump allocator: it will return the next N bytes of memory in he current block until the block is completely used. Thus it is almost huranteed that two following allocations will be placed adjacent to each other in memory. 
+This is good news for us, if we allocate two arrays with one element each, then the two butterflies will be next to each other in virtually every case.
+
+# Building exploit primitives
+While the bug in question looks like an out-of-bound read at first, it is actually a more powerful primitive as it lets us `inject` JSValues of our choosing into the newly created JavaScript arrays, and thus into the engine.
+
+We will now create contruct two exploit primitives from the given bug, allowing us to:
+1. leak address if an arbitrary JS object
+2. inject a fake JS object into the engine
+
+We will call these primitives `addrof` & `fakeobj`.
+
+# Prerequisites: Int64
+As we have previously seen, our eexploit primitive currently returns floating point values instead if ints. In fact, at least in theory, all numbers in JS are 64bit floating point numbers. In reality as already mentioned, most engines have a dedicated 32bit int type for performance reasons, but convert to floating point values when neccessary. It is thus not possible to represent arbitrary 64-bit ints with primitive numbers in JS
+
+As such a helper module had to be built which allowed storing 64bit int instances, it supports:
+- Initialization of int64 instances from different argument types: strings, numbers and byte arrays
+- Assigning the result of addition and subtraction to an existing instance through the `assignXXX` menthods. Using these methods avoids further heap allocations which might br desirable at times.
+- Creating new instances that store the result of an addition or subtraction trough the Add and Sub functions
+- Converting between doubles, JSValues and Int64 instances such that the underlying bit pattern stays the same.
+
+The last point deserves further discussing. As we have seen above we obtain a double whose underlying memory interpreted as native interger is our desired address. We thus need to convert between native doubles and our ints such that the underlying bits stay the same. `asDouble()` can be thought of as running the following `C` code: 
+```c
+double asDouble(uint64_t num)
+{
+	return *(double*)&num;
+}
+```
+
+The asJSValue method further respects the NaN-boxing procedure and produces a JSValue with the given bit pattern
+
+# addrof & fakeobj
+Both primitives rely on the fact that JSC stores arrays in doubles in native representation as opposed to the NaN-boxed representation. This essentially allows us to write native doubles(indexing type ArrayWithDoubles) but have the engine treat them as JSValues and vice versa.
+So here are the steps required for exploting the address leak:
+1. Create an array of doubles. This will be stored internally as IndexingType and ArrayWithDouble
+2. Set up an object with a custom `valueOf` function which will:
+	- Shrink the previoulsy created array
+	- Allocate a new containing just the object whose address we wish to know. This array will most likely be placed right behind the new butterfly since it's located in the copied space
+	- Return a value larger than the new size of the array to trigger the bug
+3. Call `slice()` on the target array the object from step 2 as one of the argumnets.
+
+We will now find the desired address in thre form of a 64-bit floating point value inside the array. This works because `slice()` preserves the indexing type. Our new array will thus treat the data as native doubles as well, allowing us to leak arbitrary JSValues instances, and this pointers.
+
+The `fakeobj` primitive works essentially the other way around. Here we inject native doubles into an array of JSValues, allowing us to create JSObject pointer:
+1. Create an array of objects. This will not be storted internally as `IndexingTypeArrayWithContiguous`
+2. Set up an object with a custom `valueOf` function which will:
+	- shrink the previously created array
+	- allocate a new array containing just a double whose bit pattern matches the address of the JSObject we wish to inject. The `IndexingType` will be `ArrayWithDouble`
+	- return a value larger than the new size of the array to trigger the bug
+3. Call `slice()` on the target array the object from step 2 as one of the args.
