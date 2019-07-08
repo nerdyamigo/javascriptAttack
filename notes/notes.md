@@ -358,3 +358,17 @@ What does a JSCell contain? JSCell.h revelas:
 - `CellState m_cellstate`;
 	- We have also seen this before. IT is used by the garbage collector during collection.
 
+# Structures 
+
+JSC creates meta-objects which describe the structure, or layout, of JS object. These objects represent mappings from prop names to indices into the inline storage or the butterfly. In its most basic form, such a structure could be an array of <property name, slot index> pairs. It could also be implemented as a linked list or a hash map. Instead of storing a pointer to this structure in every JSCell instance, the developers instead decided to store a 32-bit index into a structure table to save some space for other fields.
+
+So what happens when a new property is added to an object? If this happens for the first time then a new `Structure` instance will be allocated, containing the previous slot indices for all existing properties and an additional one for the new property. The property would then be stored at the corresponding index, possibly requiring a reallocation of the  butterfly. To avoid repeating this process, the resulting structure instance can be cached in the previous structure, in a data structure caled transition table. The original structure might also be adjusted to allocate more inline or butterfly storage up front to avoid the reallocation. This mechanism ultimately makes structures reusable. 
+
+# Exploitation
+
+Nopw that we know a bit more about the internals og the JSObject class, lets get back to creating our own `Float64Array` instance which will provide us with an arbitrary memory read/write primitive. Clearly, the most important part will be the structure ID in the JSCell header, as the associated structure instance is what makes our piece of memory "look like" a `Float64Array` to the engine. We thus need to know the ID of a `Float64Array` structure in the structure table.
+
+# Predicting structure IDs
+
+
+
