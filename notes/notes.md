@@ -366,7 +366,7 @@ So what happens when a new property is added to an object? If this happens for t
 
 # Exploitation
 
-Nopw that we know a bit more about the internals og the JSObject class, lets get back to creating our own `Float64Array` instance which will provide us with an arbitrary memory read/write primitive. Clearly, the most important part will be the structure ID in the JSCell header, as the associated structure instance is what makes our piece of memory "look like" a `Float64Array` to the engine. We thus need to know the ID of a `Float64Array` structure in the structure table.
+Now that we know a bit more about the internals og the JSObject class, lets get back to creating our own `Float64Array` instance which will provide us with an arbitrary memory read/write primitive. Clearly, the most important part will be the structure ID in the JSCell header, as the associated structure instance is what makes our piece of memory "look like" a `Float64Array` to the engine. We thus need to know the ID of a `Float64Array` structure in the structure table.
 
 # Predicting structure IDs
 
