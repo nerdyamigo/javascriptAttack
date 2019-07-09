@@ -369,6 +369,33 @@ So what happens when a new property is added to an object? If this happens for t
 Now that we know a bit more about the internals og the JSObject class, lets get back to creating our own `Float64Array` instance which will provide us with an arbitrary memory read/write primitive. Clearly, the most important part will be the structure ID in the JSCell header, as the associated structure instance is what makes our piece of memory "look like" a `Float64Array` to the engine. We thus need to know the ID of a `Float64Array` structure in the structure table.
 
 # Predicting structure IDs
+Unfortunately, structure IDs aren't necessarily static across different runs as they are allocated at runtime when required. Further, the IDs of structures created during engine starup are version dependent. As such we don't know the structure ID of a `Float64Array` instance and will need to determine it somehow.
 
+Another slight complication arises since we cannot use arbitrary structure IDs. This is because there are also structures allocated for other garbage collected cells tgat are not JavaScript objects. Calling any method referenced by their method table will lead to a crash due to a failed assertion. These structures are only allocated at engine startup though, resulting in all of them having fairly low IDs. 
+
+To overcome this problem we will make use of a simple spraying approach: we will spray a few thousand structures that all describe `Float64Array` instances, then pick a high initial ID and see if we've hit a correct one.
+```js
+for (var i=0; i < 0x1000; i++) {
+	var a = new Float64Array(1);
+	// add a new property to create a new Structure instance
+	a[randomString()] = 1337;
+}
+// we can find out if we have guessed correctly by using `instanceif`. If we did not, simply use the next structure
+while (!(fakearray instanceof Float64Array)) {
+	// increment structure ID by one here
+}
+```
+`instaceof` is a fairly safe operstion as it will only fetch the structure, fetch the prototype from that and do a pointer comparison with the given prototype object.
+
+# Faking a `Float64Array`
+`Float64Arrays` are implemented by the native `JSArrayBufferView` class. In the addition to the new standard JSObject, fields, this class also contains the pointer to the backing memory (we'll refer to it as 'vector', similar to the source code), as well as a length and mode field (both 32-bit integers).
+
+Since we place our `Float64Array` inside the inline slots of another object, we will have to deal with some restrictions that arise due to the JSValue encoding. Specifically we:
+
+	- cannot set a nullptr butterfly pointer since null is not a valid JSValue. This is fine for now as the buttefly will not be accessed for simple element access ops.
+	- cannot set a valid mode field since it has to be larger than 0x00010000 due to the `NaN-boxing`. We can freely control the length field though.
+	- can only set the vector to point to another JSObject since these are the only pointers that a JSValue can contain. 
+
+Due to the last constraint we will set up the `Float64Arrays` vector to point to a `Uint8Array` instance
 
 
